@@ -1,0 +1,23 @@
+{
+  "name": "yt-dlp-api",
+  "version": "1.0.0",
+  "description": "YouTube video downloader API using yt-dlp",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "build": "node install-dependencies.js"
+  },
+  "engines": {
+    "node": "20.x"
+  },
+  "keywords": ["youtube", "download", "api", "yt-dlp"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "content-disposition": "^1.0.0",
+    "axios": "^1.6.0"
+  }
+}
