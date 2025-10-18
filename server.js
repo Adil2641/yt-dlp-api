@@ -42,7 +42,7 @@ if (!fs.existsSync(downloadsDir)) {
 // Use the Linux yt-dlp binary you provided
 const ytDlpPath = path.join(__dirname, 'yt-dlp_linux');
 
-// Make sure it's executable
+// Make sure it's executable on Linux
 if (!isWindows && fs.existsSync(ytDlpPath)) {
     try {
         fs.chmodSync(ytDlpPath, 0o755);
@@ -50,6 +50,8 @@ if (!isWindows && fs.existsSync(ytDlpPath)) {
     } catch (error) {
         console.log(`⚠️  Could not make yt-dlp_linux executable: ${error.message}`);
     }
+} else if (!fs.existsSync(ytDlpPath)) {
+    console.log(`❌ yt-dlp_linux not found at: ${ytDlpPath}`);
 }
 
 const ffmpegDir = path.join(__dirname, 'ffmpeg');
@@ -69,8 +71,13 @@ async function checkDependencies() {
     // Check yt-dlp
     try {
         if (fs.existsSync(ytDlpPath)) {
+            // Ensure executable permissions
             if (!isWindows) {
-                fs.chmodSync(ytDlpPath, 0o755);
+                try {
+                    fs.chmodSync(ytDlpPath, 0o755);
+                } catch (error) {
+                    console.log('⚠️  Could not set executable permissions');
+                }
             }
             
             const version = await execPromise(`"${ytDlpPath}" --version`);
@@ -95,7 +102,11 @@ async function checkDependencies() {
     try {
         if (fs.existsSync(ffmpegPath)) {
             if (!isWindows) {
-                fs.chmodSync(ffmpegPath, 0o755);
+                try {
+                    fs.chmodSync(ffmpegPath, 0o755);
+                } catch (error) {
+                    console.log('⚠️  Could not set FFmpeg executable permissions');
+                }
             }
             
             const version = await execPromise(`"${ffmpegPath}" -version`);
