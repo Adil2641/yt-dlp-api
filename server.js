@@ -39,20 +39,13 @@ if (!fs.existsSync(downloadsDir)) {
     console.log(`📁 Created downloads directory: ${downloadsDir}`);
 }
 
-// Use the Linux yt-dlp binary you provided
-const ytDlpPath = path.join(__dirname, 'yt-dlp_linux');
+// Cookie file path - users need to provide this
+const cookiesFilePath = process.env.COOKIES_FILE_PATH || path.join(__dirname, 'cookies.txt');
 
-// Make sure it's executable on Linux
-if (!isWindows && fs.existsSync(ytDlpPath)) {
-    try {
-        fs.chmodSync(ytDlpPath, 0o755);
-        console.log(`✅ Made yt-dlp_linux executable`);
-    } catch (error) {
-        console.log(`⚠️  Could not make yt-dlp_linux executable: ${error.message}`);
-    }
-} else if (!fs.existsSync(ytDlpPath)) {
-    console.log(`❌ yt-dlp_linux not found at: ${ytDlpPath}`);
-}
+// Platform-specific binary paths
+const ytDlpPath = isWindows 
+    ? path.join(__dirname, 'yt-dlp.exe')
+    : path.join(__dirname, 'yt-dlp');
 
 const ffmpegDir = path.join(__dirname, 'ffmpeg');
 const ffmpegPath = isWindows
@@ -63,7 +56,8 @@ const ffmpegPath = isWindows
 async function checkDependencies() {
     const dependencies = {
         ytDlp: false,
-        ffmpeg: false
+        ffmpeg: false,
+        cookies: false
     };
 
     console.log('🔍 Checking dependencies...');
@@ -71,21 +65,15 @@ async function checkDependencies() {
     // Check yt-dlp
     try {
         if (fs.existsSync(ytDlpPath)) {
-            // Ensure executable permissions
             if (!isWindows) {
-                try {
-                    fs.chmodSync(ytDlpPath, 0o755);
-                } catch (error) {
-                    console.log('⚠️  Could not set executable permissions');
-                }
+                fs.chmodSync(ytDlpPath, 0o755);
             }
             
             const version = await execPromise(`"${ytDlpPath}" --version`);
-            console.log(`✅ yt-dlp_linux is available - Version: ${version.trim()}`);
+            console.log(`✅ yt-dlp is available - Version: ${version.trim()}`);
             dependencies.ytDlp = true;
         } else {
-            console.log('❌ yt-dlp_linux not found at:', ytDlpPath);
-            // Fallback to system yt-dlp
+            console.log('❌ yt-dlp not found, using system yt-dlp');
             try {
                 const version = await execPromise('yt-dlp --version');
                 console.log(`✅ System yt-dlp is available - Version: ${version.trim()}`);
@@ -102,11 +90,7 @@ async function checkDependencies() {
     try {
         if (fs.existsSync(ffmpegPath)) {
             if (!isWindows) {
-                try {
-                    fs.chmodSync(ffmpegPath, 0o755);
-                } catch (error) {
-                    console.log('⚠️  Could not set FFmpeg executable permissions');
-                }
+                fs.chmodSync(ffmpegPath, 0o755);
             }
             
             const version = await execPromise(`"${ffmpegPath}" -version`);
@@ -116,7 +100,6 @@ async function checkDependencies() {
         } else {
             console.log('❌ FFmpeg not found at:', ffmpegPath);
             const alternativePaths = [
-                path.join(ffmpegDir, 'ffmpeg'),
                 '/usr/bin/ffmpeg',
                 '/usr/local/bin/ffmpeg'
             ];
@@ -131,6 +114,18 @@ async function checkDependencies() {
         }
     } catch (error) {
         console.log('❌ FFmpeg check failed:', error.message);
+    }
+
+    // Check cookies file
+    if (fs.existsSync(cookiesFilePath)) {
+        console.log(`✅ Cookies file found at: ${cookiesFilePath}`);
+        dependencies.cookies = true;
+    } else {
+        console.log(`❌ Cookies file not found at: ${cookiesFilePath}`);
+        console.log('💡 To use cookies:');
+        console.log('   1. Export cookies from your browser using a cookies.txt extension');
+        console.log('   2. Save as cookies.txt in the project directory');
+        console.log('   3. Or set COOKIES_FILE_PATH environment variable');
     }
 
     return dependencies;
@@ -195,12 +190,12 @@ function cleanupOldFiles() {
 // Run cleanup every 10 minutes
 setInterval(cleanupOldFiles, 10 * 60 * 1000);
 
-// Execute yt-dlp command
+// Execute yt-dlp command with cookie support
 async function executeYtDlp(args) {
     return new Promise((resolve, reject) => {
         console.log(`🔄 Running: yt-dlp ${args.slice(0, 10).join(' ')}...`);
         
-        const ytDlpProcess = spawn(ytDlpPath, args);
+        const ytDlpProcess = spawn('yt-dlp', args);
         let stdout = '';
         let stderr = '';
         
@@ -232,48 +227,41 @@ async function executeYtDlp(args) {
     });
 }
 
-// Get video info with multiple fallback methods
+// Get video info with cookie support
 async function getVideoInfo(url) {
-    const methods = [
-        // Method 1: Mobile client with slow settings
-        [
+    const methods = [];
+    
+    // Method 1: With cookies (if available)
+    if (fs.existsSync(cookiesFilePath)) {
+        methods.push([
             '--dump-json',
             '--no-playlist', 
             '--ignore-errors',
-            '--no-warnings',
-            '--extractor-args', 'youtube:player-client=android',
-            '--throttled-rate', '10K',
-            '--sleep-requests', '5',
+            '--cookies', cookiesFilePath,
             url
-        ],
-        // Method 2: Different user agent
-        [
-            '--dump-json',
-            '--no-playlist',
-            '--ignore-errors',
-            '--no-warnings',
-            '--user-agent', 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36',
-            '--sleep-interval', '3',
-            url
-        ],
-        // Method 3: Minimal approach
-        [
-            '--dump-json', 
-            '--no-playlist',
-            '--ignore-errors',
-            url
-        ]
-    ];
+        ]);
+    }
+    
+    // Method 2: Without cookies (fallback)
+    methods.push([
+        '--dump-json',
+        '--no-playlist',
+        '--ignore-errors',
+        '--no-warnings',
+        url
+    ]);
 
     for (let i = 0; i < methods.length; i++) {
         try {
-            console.log(`🔍 Trying method ${i + 1} for: ${url}`);
+            const methodName = fs.existsSync(cookiesFilePath) && i === 0 ? 'with cookies' : 'without cookies';
+            console.log(`🔍 Trying method ${i + 1} (${methodName}) for: ${url}`);
+            
             const result = await executeYtDlp(methods[i]);
             
             if (result.success && result.stdout) {
                 const info = JSON.parse(result.stdout);
                 if (info.id) {
-                    console.log(`✅ Success with method ${i + 1}`);
+                    console.log(`✅ Success with method ${i + 1} (${methodName})`);
                     return info;
                 }
             }
@@ -282,48 +270,39 @@ async function getVideoInfo(url) {
         }
         
         if (i < methods.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 5000)); // 5 second delay
+            await new Promise(resolve => setTimeout(resolve, 2000));
         }
     }
     
-    throw new Error('All methods failed. YouTube is blocking requests from cloud servers.');
+    throw new Error('All methods failed. ' + (fs.existsSync(cookiesFilePath) ? 
+        'Cookies might be expired or invalid.' : 
+        'No cookies provided. YouTube is blocking requests.'));
 }
 
-// Download media with multiple fallback methods
+// Download media with cookie support
 async function downloadMedia(url, options) {
-    const methods = [
-        // Method 1: Mobile client with slow settings
-        [
+    const methods = [];
+    
+    // Method 1: With cookies (if available)
+    if (fs.existsSync(cookiesFilePath)) {
+        methods.push([
             '--no-playlist',
             '--ignore-errors',
-            '--no-warnings',
-            '--extractor-args', 'youtube:player-client=android',
-            '--throttled-rate', '10K',
-            '--sleep-requests', '5',
+            '--cookies', cookiesFilePath,
             ...options.args,
             '-o', options.output,
             url
-        ],
-        // Method 2: Different user agent
-        [
-            '--no-playlist',
-            '--ignore-errors', 
-            '--no-warnings',
-            '--user-agent', 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36',
-            '--sleep-interval', '3',
-            ...options.args,
-            '-o', options.output, 
-            url
-        ],
-        // Method 3: Minimal approach
-        [
-            '--no-playlist',
-            '--ignore-errors',
-            ...options.args,
-            '-o', options.output,
-            url
-        ]
-    ];
+        ]);
+    }
+    
+    // Method 2: Without cookies (fallback)
+    methods.push([
+        '--no-playlist',
+        '--ignore-errors',
+        ...options.args,
+        '-o', options.output,
+        url
+    ]);
 
     // Add FFmpeg location to all methods
     if (fs.existsSync(ffmpegPath)) {
@@ -334,13 +313,15 @@ async function downloadMedia(url, options) {
 
     for (let i = 0; i < methods.length; i++) {
         try {
-            console.log(`📥 Trying download method ${i + 1}`);
+            const methodName = fs.existsSync(cookiesFilePath) && i === 0 ? 'with cookies' : 'without cookies';
+            console.log(`📥 Trying download method ${i + 1} (${methodName})`);
+            
             await executeYtDlp(methods[i]);
             
             const baseName = path.basename(options.output);
             const downloadedFile = findDownloadedFile(baseName);
             if (downloadedFile) {
-                console.log(`✅ Download successful with method ${i + 1}`);
+                console.log(`✅ Download successful with method ${i + 1} (${methodName})`);
                 return { success: true };
             }
         } catch (error) {
@@ -349,11 +330,13 @@ async function downloadMedia(url, options) {
         }
         
         if (i < methods.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            await new Promise(resolve => setTimeout(resolve, 2000));
         }
     }
     
-    throw new Error('All download methods failed. YouTube is blocking downloads from cloud servers.');
+    throw new Error('All download methods failed. ' + (fs.existsSync(cookiesFilePath) ? 
+        'Cookies might be expired or invalid.' : 
+        'No cookies provided. YouTube is blocking downloads.'));
 }
 
 // Clean up partial download files
@@ -435,7 +418,8 @@ app.get('/v-i', async (req, res) => {
         
         res.json({
             success: true,
-            data: info
+            data: info,
+            method: fs.existsSync(cookiesFilePath) ? 'with_cookies' : 'without_cookies'
         });
         
     } catch (error) {
@@ -443,8 +427,10 @@ app.get('/v-i', async (req, res) => {
         
         res.status(500).json({
             success: false,
-            error: 'YouTube is blocking requests from cloud servers. For reliable access, run this API locally on your computer.',
-            solution: 'Download the project and run: npm install && npm start'
+            error: error.message,
+            solution: fs.existsSync(cookiesFilePath) ? 
+                'Cookies might be expired. Update your cookies.txt file.' :
+                'Add a cookies.txt file to bypass YouTube restrictions.'
         });
     }
 });
@@ -537,8 +523,10 @@ app.get('/v-dl', async (req, res) => {
         
         res.status(500).json({
             success: false,
-            error: 'YouTube is blocking downloads from cloud servers. For reliable downloads, run this API locally on your computer.',
-            solution: 'Download the project and run: npm install && npm start'
+            error: error.message,
+            solution: fs.existsSync(cookiesFilePath) ? 
+                'Cookies might be expired. Update your cookies.txt file.' :
+                'Add a cookies.txt file to bypass YouTube restrictions.'
         });
     }
 });
@@ -657,8 +645,10 @@ app.get('/a-dl', async (req, res) => {
         
         res.status(500).json({
             success: false,
-            error: 'YouTube is blocking downloads from cloud servers. For reliable downloads, run this API locally on your computer.',
-            solution: 'Download the project and run: npm install && npm start'
+            error: error.message,
+            solution: fs.existsSync(cookiesFilePath) ? 
+                'Cookies might be expired. Update your cookies.txt file.' :
+                'Add a cookies.txt file to bypass YouTube restrictions.'
         });
     }
 });
@@ -674,23 +664,52 @@ app.get('/health', async (req, res) => {
         platform: process.platform,
         environment: isRender ? 'render' : 'local',
         dependencies: dependencies,
-        note: '⚠️  Cloud deployments often get blocked by YouTube. Local deployment is recommended for reliable access.'
+        setup_instructions: !dependencies.cookies ? [
+            '1. Install a cookies.txt browser extension',
+            '2. Export cookies while logged into YouTube',
+            '3. Save as cookies.txt in the project directory',
+            '4. Restart the server'
+        ] : ['✅ Cookies are configured and ready to use']
+    });
+});
+
+// Instructions endpoint
+app.get('/setup-cookies', (req, res) => {
+    res.json({
+        success: true,
+        instructions: {
+            step1: 'Install a cookies.txt browser extension (Chrome/Firefox)',
+            step2: 'Log into YouTube in your browser',
+            step3: 'Use the extension to export cookies as cookies.txt',
+            step4: 'Upload cookies.txt to your server/project directory',
+            step5: 'Restart the API server',
+            note: 'Cookies typically expire after a few months and need to be refreshed'
+        },
+        browser_extensions: {
+            chrome: 'https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc',
+            firefox: 'https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/'
+        }
     });
 });
 
 // Root endpoint
 app.get('/', (req, res) => {
+    const hasCookies = fs.existsSync(cookiesFilePath);
+    
     res.json({
         success: true,
         message: 'YT-DLP API Server is running!',
-        warning: 'YouTube frequently blocks cloud deployments. For reliable usage, run this locally.',
+        cookie_status: hasCookies ? '✅ Cookies configured' : '❌ No cookies found',
         endpoints: {
             video_info: 'GET /v-i?url=YOUTUBE_URL',
             video_download: 'GET /v-dl?url=YOUTUBE_URL',
             audio_download: 'GET /a-dl?url=YOUTUBE_URL',
-            health_check: 'GET /health'
+            health_check: 'GET /health',
+            setup_instructions: 'GET /setup-cookies'
         },
-        local_usage: 'For best results: git clone <repo> && npm install && npm start'
+        note: hasCookies ? 
+            'Cookies are enabled. YouTube restrictions should be bypassed.' :
+            'Add cookies.txt to bypass YouTube restrictions. See /setup-cookies'
     });
 });
 
@@ -719,11 +738,19 @@ app.listen(PORT, async () => {
     console.log(`🎵 Audio download endpoint: GET /a-dl?url=YOUTUBE_URL`);
     console.log(`❤️  Health check: GET /health`);
     console.log(`💾 Downloads directory: ${downloadsDir}`);
-    console.log(`🔧 Using yt-dlp_linux binary`);
-    console.log(`⚠️  IMPORTANT: Cloud deployments often get blocked by YouTube.`);
-    console.log(`💡 For reliable usage, run this API locally on your computer.`);
     
-    await checkDependencies();
+    const dependencies = await checkDependencies();
+    
+    if (dependencies.cookies) {
+        console.log(`🍪 Cookies enabled: ${cookiesFilePath}`);
+        console.log(`✅ YouTube restrictions should be bypassed`);
+    } else {
+        console.log(`❌ No cookies file found at: ${cookiesFilePath}`);
+        console.log(`💡 To bypass YouTube restrictions:`);
+        console.log(`   1. Install a cookies.txt browser extension`);
+        console.log(`   2. Export cookies while logged into YouTube`);
+        console.log(`   3. Save as cookies.txt in the project directory`);
+    }
 });
 
 // Graceful shutdown
